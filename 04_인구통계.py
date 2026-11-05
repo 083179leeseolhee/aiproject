@@ -1,1 +1,488 @@
 
+from pathlib import Path
+import re
+
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+
+
+# ==================================================
+# 1. 페이지 기본 설정
+# ==================================================
+st.set_page_config(
+    page_title="도봉구 연령별 인구 분석",
+    page_icon="📊",
+    layout="wide",
+)
+
+st.title("📊 도봉구 연령별 인구 분석")
+st.caption("행정구역 · 성별 · 연도별 연령대 인구 현황")
+
+
+# ==================================================
+# 2. 파일 경로 설정
+# 현재 파일이 page 또는 pages 폴더 안에 있고,
+# CSV 파일은 그 상위 폴더에 있습니다.
+# ==================================================
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+CSV_PATH = PROJECT_DIR / "population.csv"
+
+
+# ==================================================
+# 3. 데이터 열 이름 설정
+# ==================================================
+AGE_GROUPS = [
+    "0~9세",
+    "10~19세",
+    "20~29세",
+    "30~39세",
+    "40~49세",
+    "50~59세",
+    "60~69세",
+    "70~79세",
+    "80~89세",
+    "90~99세",
+    "100세 이상",
+]
+
+YEARS = list(range(2020, 2026))
+
+GENDER_PREFIX = {
+    "전체": "거주자",
+    "남성": "남_거주자",
+    "여성": "여_거주자",
+}
+
+HOT_PINK = "#FF1493"
+
+
+# ==================================================
+# 4. CSV 불러오기
+# CP949 인코딩 및 숫자 데이터 처리
+# ==================================================
+@st.cache_data(show_spinner="인구 데이터를 불러오는 중입니다...")
+def load_population_data(csv_path: str) -> pd.DataFrame:
+
+    data = pd.read_csv(
+        csv_path,
+        encoding="cp949",
+        thousands=",",
+    )
+
+    if "행정구역" not in data.columns:
+        raise ValueError(
+            "CSV 파일에 '행정구역' 열이 없습니다."
+        )
+
+    data["행정구역"] = (
+        data["행정구역"].astype(str).str.strip()
+    )
+
+    # 필요한 데이터 열 확인
+    required_columns = [
+        f"{year}년_{gender_prefix}_{age_group}"
+        for year in YEARS
+        for gender_prefix in GENDER_PREFIX.values()
+        for age_group in AGE_GROUPS
+    ]
+
+    missing_columns = [
+        column
+        for column in required_columns
+        if column not in data.columns
+    ]
+
+    if missing_columns:
+        raise ValueError(
+            "CSV 파일에서 필요한 열을 찾을 수 없습니다: "
+            + ", ".join(missing_columns[:5])
+        )
+
+    # 인구 데이터를 숫자형으로 변환
+    for column in required_columns:
+        data[column] = pd.to_numeric(
+            data[column],
+            errors="coerce"
+        )
+
+    if data[required_columns].isna().any().any():
+        raise ValueError(
+            "인구 데이터에 비어 있거나 숫자가 아닌 값이 있습니다."
+        )
+
+    return data
+
+
+# ==================================================
+# 5. 행정구역 이름 정리
+# ==================================================
+def make_district_label(raw_name: str) -> str:
+
+    name = re.sub(
+        r"\s*\(\d+\)$",
+        "",
+        str(raw_name)
+    ).strip()
+
+    prefix = "서울특별시 도봉구"
+
+    if name == prefix:
+        return "도봉구 전체"
+
+    if name.startswith(prefix):
+        return name[len(prefix):].strip()
+
+    return name
+
+
+# ==================================================
+# 6. 파일 존재 여부 및 데이터 오류 처리
+# ==================================================
+if not CSV_PATH.is_file():
+
+    st.error(
+        "population.csv 파일을 찾을 수 없습니다. "
+        "CSV 파일이 프로젝트 최상위 폴더에 있는지 확인해 주세요."
+    )
+
+    st.code(
+        "프로젝트 폴더/\n"
+        "├── population.csv\n"
+        "├── requirements.txt\n"
+        "├── Home.py (선택 사항)\n"
+        "└── page/ 또는 pages/\n"
+        "    └── analysis.py"
+    )
+
+    st.stop()
+
+
+try:
+    df = load_population_data(str(CSV_PATH))
+
+except UnicodeDecodeError:
+
+    st.error(
+        "CSV 인코딩을 읽을 수 없습니다. "
+        "원본 파일이 CP949 인코딩인지 확인해 주세요."
+    )
+
+    st.stop()
+
+except (
+    pd.errors.ParserError,
+    ValueError,
+    OSError
+) as error:
+
+    st.error(
+        f"CSV 파일을 읽거나 검증하는 중 문제가 발생했습니다: {error}"
+    )
+
+    st.stop()
+
+
+# 중복 행정구역 검사
+if df["행정구역"].duplicated().any():
+
+    st.error(
+        "CSV에 중복된 행정구역 데이터가 있습니다."
+    )
+
+    st.stop()
+
+
+df["행정구역_표시"] = (
+    df["행정구역"].apply(make_district_label)
+)
+
+
+if df["행정구역_표시"].duplicated().any():
+
+    st.error(
+        "표시용 행정구역 이름이 중복됩니다."
+    )
+
+    st.stop()
+
+
+# ==================================================
+# 7. 분석 조건 선택
+# ==================================================
+st.subheader("분석 조건 선택")
+
+col1, col2, col3 = st.columns(3)
+
+district_options = df["행정구역_표시"].tolist()
+
+default_district_index = (
+    district_options.index("도봉구 전체")
+    if "도봉구 전체" in district_options
+    else 0
+)
+
+
+with col1:
+
+    selected_district = st.selectbox(
+        "행정구역",
+        options=district_options,
+        index=default_district_index,
+    )
+
+
+with col2:
+
+    selected_gender = st.selectbox(
+        "성별",
+        options=list(GENDER_PREFIX.keys()),
+        index=0,
+    )
+
+
+with col3:
+
+    selected_year = st.selectbox(
+        "연도",
+        options=YEARS,
+        index=len(YEARS) - 1,
+        format_func=lambda year: f"{year}년",
+    )
+
+
+# ==================================================
+# 8. 선택한 조건에 맞는 데이터 추출
+# ==================================================
+selected_rows = df.loc[
+    df["행정구역_표시"] == selected_district
+]
+
+if selected_rows.empty:
+
+    st.error(
+        "선택한 행정구역의 데이터를 찾을 수 없습니다."
+    )
+
+    st.stop()
+
+
+if len(selected_rows) != 1:
+
+    st.error(
+        "선택한 행정구역 데이터가 여러 개입니다."
+    )
+
+    st.stop()
+
+
+selected_row = selected_rows.iloc[0]
+
+selected_prefix = GENDER_PREFIX[selected_gender]
+
+selected_columns = [
+    f"{selected_year}년_{selected_prefix}_{age_group}"
+    for age_group in AGE_GROUPS
+]
+
+
+chart_data = pd.DataFrame(
+    {
+        "나이": AGE_GROUPS,
+        "인구수": [
+            int(selected_row[column])
+            for column in selected_columns
+        ],
+    }
+)
+
+
+# ==================================================
+# 9. 인구 통계 요약
+# ==================================================
+total_population = int(
+    chart_data["인구수"].sum()
+)
+
+max_age_row = chart_data.loc[
+    chart_data["인구수"].idxmax()
+]
+
+
+metric1, metric2 = st.columns(2)
+
+metric1.metric(
+    "선택한 연령대 인구 합계",
+    f"{total_population:,}명"
+)
+
+metric2.metric(
+    "인구가 가장 많은 연령대",
+    str(max_age_row["나이"]),
+    f"{int(max_age_row['인구수']):,}명"
+)
+
+
+# ==================================================
+# 10. 핫핑크 꺾은선 그래프
+# ==================================================
+fig = go.Figure()
+
+
+fig.add_trace(
+    go.Scatter(
+        x=chart_data["나이"],
+        y=chart_data["인구수"],
+        mode="lines+markers",
+
+        name=(
+            f"{selected_district} · "
+            f"{selected_gender} · "
+            f"{selected_year}년"
+        ),
+
+        line={
+            "color": HOT_PINK,
+            "width": 4,
+        },
+
+        marker={
+            "color": HOT_PINK,
+            "size": 9,
+        },
+
+        hovertemplate=(
+            "나이: %{x}<br>"
+            "인구수: %{y:,}명"
+            "<extra></extra>"
+        ),
+    )
+)
+
+
+# ==================================================
+# 11. 그래프 세부 설정
+# ==================================================
+fig.update_layout(
+
+    title={
+        "text": (
+            f"{selected_district} "
+            f"{selected_gender} "
+            f"연령대별 인구수 "
+            f"({selected_year}년)"
+        ),
+        "x": 0.5,
+        "xanchor": "center",
+    },
+
+    # 가로축 설정
+    xaxis={
+
+        "title": "나이",
+
+        "type": "category",
+
+        "categoryorder": "array",
+
+        "categoryarray": AGE_GROUPS,
+
+        "tickmode": "array",
+
+        "tickvals": AGE_GROUPS,
+
+        "ticktext": AGE_GROUPS,
+
+        "showgrid": True,
+
+        "gridcolor": "#F7C5DC",
+
+        "gridwidth": 1,
+
+        "showline": True,
+
+        "linecolor": "#777777",
+
+        "zeroline": False,
+    },
+
+    # 세로축 설정
+    yaxis={
+
+        "title": "인구수 (명)",
+
+        "tickmode": "linear",
+
+        "tick0": 0,
+
+        "dtick": 10_000_000,
+
+        "tickformat": ",",
+
+        "range": [0, 10_000_000],
+
+        "showgrid": True,
+
+        "gridcolor": "#D9D9D9",
+
+        "gridwidth": 1,
+
+        "showline": True,
+
+        "linecolor": "#777777",
+
+        "zeroline": True,
+
+        "zerolinecolor": "#999999",
+    },
+
+    # 한글 글꼴 설정
+    font={
+
+        "family": (
+            "Malgun Gothic, "
+            "Apple SD Gothic Neo, "
+            "Noto Sans KR, "
+            "sans-serif"
+        ),
+
+        "size": 13,
+
+        "color": "#333333",
+    },
+
+    plot_bgcolor="white",
+
+    paper_bgcolor="white",
+
+    hovermode="x unified",
+
+    height=560,
+
+    margin={
+        "l": 100,
+        "r": 35,
+        "t": 85,
+        "b": 80,
+    },
+
+    showlegend=False,
+)
+
+
+# ==================================================
+# 12. Streamlit에 그래프 출력
+# ==================================================
+st.plotly_chart(
+    fig,
+    use_container_width=True
+)
+
+
+st.caption(
+    "※ 가로축은 10세 단위 연령 구간이며, "
+    "세로축은 1,000만 명(10,000,000명) 간격으로 설정했습니다. "
+    "실제 연령대별 인구수는 1,000만 명보다 훨씬 작으므로 "
+    "그래프 선이 세로축 아래쪽에 가깝게 표시됩니다."
+)
+
