@@ -1,476 +1,332 @@
 
 import streamlit as st
 import pandas as pd
-import re
 from pathlib import Path
+import html
 
-# ==========================================
-# 1. 페이지 기본 설정
-# ==========================================
+# ---------------------------------
+# 1. 기본 페이지 설정
+# ---------------------------------
 
 st.set_page_config(
-    page_title="TEA & DESSERT",
-    page_icon="🍵",
+    page_title="우리 동네 디저트 레시피",
+    page_icon="🍰",
     layout="wide"
 )
 
-# ==========================================
+# ---------------------------------
 # 2. 디자인
-# ==========================================
+# ---------------------------------
 
 st.markdown("""
 <style>
 .stApp {
-    background-color: #FAF8F3;
+    background-color: #FFF9F5;
 }
 
-.main-title {
-    text-align: center;
-    color: #536B45;
-    font-size: 42px;
-    font-weight: 800;
-    padding-top: 15px;
+h1, h2, h3 {
+    color: #795548;
 }
 
-.sub-title {
-    text-align: center;
-    color: #888888;
-    font-size: 16px;
-    margin-bottom: 30px;
-}
-
-.section-title {
-    color: #536B45;
-    font-size: 23px;
-    font-weight: 700;
-    margin-top: 20px;
-}
-
-div[data-testid="stSelectbox"] {
+.recipe-card {
     background-color: white;
+    padding: 22px;
+    border-radius: 15px;
+    border: 1px solid #F0DED2;
+    margin-bottom: 15px;
+}
+
+.ingredient {
+    background-color: #FFF0E5;
+    padding: 15px;
     border-radius: 10px;
+    margin-bottom: 10px;
 }
 
 div.stButton > button {
-    background-color: #6D805A;
+    background-color: #B98770;
     color: white;
     border-radius: 10px;
     border: none;
 }
-
-div.stButton > button:hover {
-    background-color: #526542;
-    color: white;
-}
-
-.recipe-box {
-    background-color: white;
-    padding: 20px;
-    border-radius: 12px;
-    border: 1px solid #E7E2D8;
-    margin-bottom: 15px;
-}
-
 </style>
 """, unsafe_allow_html=True)
 
+# ---------------------------------
+# 3. 제목
+# ---------------------------------
 
-# ==========================================
-# 3. CSV 파일 불러오기
-# ==========================================
+st.title("🍰 우리 동네 디저트 레시피")
+st.write("다양한 디저트와 음료를 검색하고 재료 및 조리 방법을 확인해 보세요!")
+st.divider()
+
+# ---------------------------------
+# 4. CSV 파일 경로 찾기
+# ---------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
 
-DATA_PATH = BASE_DIR / "data" / "tea_dessert.csv"
+possible_paths = [
+    BASE_DIR / "data" / "tea_dessert.csv",
+    BASE_DIR.parent / "data" / "tea_dessert.csv",
+    BASE_DIR / "tea_dessert.csv",
+    BASE_DIR.parent / "tea_dessert.csv"
+]
 
-# 인코딩 자동 확인
+DATA_PATH = next(
+    (path for path in possible_paths if path.exists()),
+    None
+)
+
+if DATA_PATH is None:
+    st.error("CSV 파일을 찾을 수 없습니다.")
+    st.write("다음 경로를 확인했지만 파일이 없습니다.")
+
+    for path in possible_paths:
+        st.write(str(path))
+
+    st.info(
+        "tea_dessert.csv 파일을 프로젝트 최상위 폴더의 "
+        "data 폴더 안에 넣어 주세요."
+    )
+    st.stop()
+
+# ---------------------------------
+# 5. CSV 불러오기
+# ---------------------------------
+
 @st.cache_data
-def load_data():
+def load_data(file_path):
 
-    encodings = ["cp949", "euc-kr", "utf-8-sig", "utf-8"]
+    encodings = [
+        "cp949",
+        "euc-kr",
+        "utf-8-sig",
+        "utf-8"
+    ]
 
     for encoding in encodings:
         try:
             data = pd.read_csv(
-                DATA_PATH,
+                file_path,
                 encoding=encoding
             )
-            break
+            return data
 
         except UnicodeDecodeError:
             continue
 
-    else:
-        raise ValueError("CSV 파일 인코딩을 확인해주세요.")
-
-    # 열 이름 공백 제거
-    data.columns = data.columns.str.strip()
-
-    # 필요한 열 확인
-    required_columns = [
-        "요리명",
-        "주재료",
-        "부재료",
-        "조리법",
-        "상세설명"
-    ]
-
-    for col in required_columns:
-        if col not in data.columns:
-            raise ValueError(
-                f"CSV 파일에 '{col}' 열이 없습니다."
-            )
-
-    # 빈 데이터 처리
-    data = data.fillna("")
-
-    # 요리명 공백 제거
-    data["요리명"] = data["요리명"].astype(str).str.strip()
-
-    # 요리명이 없는 행 제거
-    data = data[data["요리명"] != ""]
-
-    # 중복 메뉴 제거
-    data = data.drop_duplicates(
-        subset=["요리명"],
-        keep="first"
-    )
-
-    return data
-
+    raise ValueError("CSV 파일의 인코딩을 읽을 수 없습니다.")
 
 try:
-    df = load_data()
+    df = load_data(str(DATA_PATH))
 
 except Exception as e:
-    st.error(f"데이터를 불러오지 못했습니다: {e}")
-    st.info(
-        "data 폴더 안에 tea_dessert.csv 파일이 있는지 확인해주세요."
-    )
+    st.error(f"CSV 파일을 불러오는 중 오류가 발생했습니다: {e}")
     st.stop()
 
+# ---------------------------------
+# 6. 데이터 정리
+# ---------------------------------
 
-# ==========================================
-# 4. 메뉴 종류 자동 분류
-# ==========================================
-
-dessert_keywords = [
-    "케이크", "마카롱", "아포가토", "푸딩",
-    "아이스크림", "쿠키", "타르트", "파이",
-    "빙수", "초콜릿", "가나슈", "브라우니",
-    "무스", "젤리", "양갱", "와플",
-    "팬케이크", "크레이프", "티라미수",
-    "머핀", "스콘", "디저트", "다쿠아즈",
-    "슈", "에클레어", "파르페", "찹쌀케이크",
-    "생크림", "과일청"
+required_columns = [
+    "요리명",
+    "주재료",
+    "부재료",
+    "조리법",
+    "상세설명"
 ]
 
-drink_keywords = [
-    "라떼", "에이드", "스무디", "밀크티",
-    "아이스티", "차 음료", "주스", "음료",
-    "차"
+missing_columns = [
+    col for col in required_columns
+    if col not in df.columns
 ]
 
-# 일반 음식에 해당하는 단어
-food_keywords = [
-    "삼겹살", "불고기", "찌개", "볶음밥",
-    "비빔밥", "전골", "국수", "조림",
-    "구이", "무침", "탕", "전"
-]
+if missing_columns:
+    st.error(
+        "CSV 파일에 필요한 열이 없습니다: "
+        + ", ".join(missing_columns)
+    )
+    st.write("현재 CSV 파일의 열 이름:", list(df.columns))
+    st.stop()
 
+df = df.copy()
+
+for col in required_columns:
+    df[col] = df[col].fillna("").astype(str).str.strip()
+
+df = df[df["요리명"] != ""]
+df = df.drop_duplicates(subset=["요리명"])
+
+# ---------------------------------
+# 7. 디저트 / 음료 / 기타 음식 분류
+# ---------------------------------
 
 def classify_menu(name):
 
     name = str(name)
 
-    # 일반 음식 우선 분류
-    if any(word in name for word in food_keywords):
-        return "기타 음식"
+    dessert_keywords = [
+        "케이크", "쿠키", "푸딩", "떡",
+        "아이스크림", "빙수", "타르트",
+        "파이", "과자", "초콜릿", "디저트",
+        "양갱", "젤리", "머핀", "팬케이크",
+        "와플", "마카롱", "스콘", "정과",
+        "다식", "강정", "한과", "과일"
+    ]
 
-    # 디저트 분류
-    if any(word in name for word in dessert_keywords):
+    drink_keywords = [
+        "차", "음료", "주스", "에이드",
+        "라떼", "커피", "스무디", "식혜",
+        "수정과", "청", "차류"
+    ]
+
+    if any(keyword in name for keyword in dessert_keywords):
         return "디저트"
 
-    # 음료 분류
-    if any(word in name for word in drink_keywords):
+    elif any(keyword in name for keyword in drink_keywords):
         return "음료"
 
-    return "기타 음식"
+    else:
+        return "기타 음식"
 
 
-df["메뉴종류"] = df["요리명"].apply(classify_menu)
+df["분류"] = df["요리명"].apply(classify_menu)
 
+# ---------------------------------
+# 8. 메뉴 선택
+# ---------------------------------
 
-# ==========================================
-# 5. 상단 제목
-# ==========================================
+st.subheader("🔎 원하는 메뉴 찾기")
 
-st.markdown(
-    '<div class="main-title">🍵 TEA & DESSERT</div>',
-    unsafe_allow_html=True
-)
-
-st.markdown(
-    '<div class="sub-title">'
-    '차와 디저트의 다양한 레시피를 만나보세요.'
-    '</div>',
-    unsafe_allow_html=True
-)
-
-st.divider()
-
-
-# ==========================================
-# 6. 데이터 요약
-# ==========================================
-
-dessert_count = len(
-    df[df["메뉴종류"] == "디저트"]
-)
-
-drink_count = len(
-    df[df["메뉴종류"] == "음료"]
-)
-
-col1, col2, col3 = st.columns(3)
-
-col1.metric("전체 메뉴", f"{len(df)}개")
-col2.metric("디저트", f"{dessert_count}개")
-col3.metric("음료", f"{drink_count}개")
-
-
-# ==========================================
-# 7. 메뉴 검색 및 선택
-# ==========================================
-
-st.markdown(
-    '<div class="section-title">🔎 메뉴 검색</div>',
-    unsafe_allow_html=True
-)
-
-category = st.radio(
-    "메뉴 종류",
-    ["디저트", "음료", "전체 음식"],
+menu_type = st.radio(
+    "메뉴 종류를 선택하세요.",
+    ["전체", "디저트", "음료", "기타 음식"],
     horizontal=True
 )
 
-if category == "전체 음식":
-    menu_df = df.copy()
-
+if menu_type == "전체":
+    filtered_df = df.copy()
 else:
-    menu_df = df[
-        df["메뉴종류"] == category
-    ].copy()
+    filtered_df = df[df["분류"] == menu_type].copy()
 
-
-search = st.text_input(
+search_word = st.text_input(
     "메뉴 이름 검색",
-    placeholder="예: 녹차케이크, 마카롱, 푸딩"
+    placeholder="예: 녹차, 케이크, 쿠키..."
 )
 
-if search:
-    menu_df = menu_df[
-        menu_df["요리명"].str.contains(
-            search,
+if search_word:
+    filtered_df = filtered_df[
+        filtered_df["요리명"].str.contains(
+            search_word,
             case=False,
             na=False
         )
     ]
 
-
-if menu_df.empty:
-
-    st.warning("검색 결과가 없습니다.")
-
+if filtered_df.empty:
+    st.warning("검색 결과가 없습니다. 다른 메뉴를 검색해 주세요.")
     st.stop()
 
+# ---------------------------------
+# 9. 메뉴 선택창
+# ---------------------------------
+
+menu_list = sorted(filtered_df["요리명"].unique())
 
 selected_menu = st.selectbox(
-    "원하는 메뉴를 선택하세요.",
-    menu_df["요리명"].tolist()
+    "레시피를 확인할 메뉴를 선택하세요.",
+    menu_list
 )
 
-
-# ==========================================
-# 8. 선택한 메뉴 데이터 불러오기
-# ==========================================
-
-recipe = menu_df[
-    menu_df["요리명"] == selected_menu
+selected_data = filtered_df[
+    filtered_df["요리명"] == selected_menu
 ].iloc[0]
 
+# ---------------------------------
+# 10. 선택한 메뉴 정보
+# ---------------------------------
 
 st.divider()
 
+st.title(f"🍮 {selected_data['요리명']}")
 
-# ==========================================
-# 9. 메뉴 이름 표시
-# ==========================================
+st.caption(f"메뉴 분류: {selected_data['분류']}")
 
-st.markdown(
-    f"""
-    <div style="
-        text-align:center;
-        background-color:#E9EDE2;
-        padding:25px;
-        border-radius:15px;
-        margin-bottom:20px;
-    ">
-        <h1 style="color:#536B45;">
-            {recipe['요리명']}
-        </h1>
-        <p style="color:#777777;">
-            {recipe['메뉴종류']} 레시피
-        </p>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+# ---------------------------------
+# 11. 재료 정보
+# ---------------------------------
 
-
-# ==========================================
-# 10. 재료 정보
-# ==========================================
-
-st.markdown(
-    '<div class="section-title">🥣 재료 준비</div>',
-    unsafe_allow_html=True
-)
+st.subheader("🧺 필요한 재료")
 
 col1, col2 = st.columns(2)
 
 with col1:
-
     st.markdown("### 주재료")
-
-    if recipe["주재료"]:
-        st.info(recipe["주재료"])
-    else:
-        st.write("등록된 주재료가 없습니다.")
-
-
-with col2:
-
-    st.markdown("### 부재료")
-
-    if recipe["부재료"]:
-        st.info(recipe["부재료"])
-    else:
-        st.write("등록된 부재료가 없습니다.")
-
-
-# ==========================================
-# 11. 제조방법
-# ==========================================
-
-st.divider()
-
-st.markdown(
-    '<div class="section-title">👩‍🍳 제조 방법</div>',
-    unsafe_allow_html=True
-)
-
-method = str(recipe["조리법"]).strip()
-
-if method:
-
-    # ① ② ③ 등의 번호를 기준으로 단계 분리
-    pattern = r'(?=[①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳])'
-
-    steps = re.split(pattern, method)
-
-    steps = [
-        step.strip()
-        for step in steps
-        if step.strip()
-    ]
-
-    if len(steps) > 1:
-
-        for i, step in enumerate(steps, 1):
-
-            st.markdown(
-                f"""
-                <div style="
-                    background-color:white;
-                    border:1px solid #E7E2D8;
-                    border-radius:12px;
-                    padding:17px;
-                    margin-bottom:10px;
-                    line-height:1.8;
-                ">
-                    <b style="color:#536B45;">
-                        STEP {i}
-                    </b>
-                    <br>
-                    {step}
-                </div>
-                """,
-                unsafe_allow_html=True
-            )
-
-    else:
-
-        st.write(method)
-
-else:
-
-    st.warning("등록된 제조방법이 없습니다.")
-
-
-# ==========================================
-# 12. 상세 설명
-# ==========================================
-
-if recipe["상세설명"]:
-
-    st.divider()
-
     st.markdown(
-        '<div class="section-title">💡 조리 팁 및 상세 설명</div>',
+        f'<div class="ingredient">'
+        f'{html.escape(selected_data["주재료"]) or "등록된 정보가 없습니다."}'
+        f'</div>',
         unsafe_allow_html=True
     )
 
-    st.success(recipe["상세설명"])
+with col2:
+    st.markdown("### 부재료")
+    st.markdown(
+        f'<div class="ingredient">'
+        f'{html.escape(selected_data["부재료"]) or "등록된 정보가 없습니다."}'
+        f'</div>',
+        unsafe_allow_html=True
+    )
 
+# ---------------------------------
+# 12. 조리 방법
+# ---------------------------------
 
-# ==========================================
-# 13. 데이터 출처
-# ==========================================
+st.subheader("👩‍🍳 조리 방법")
+
+recipe = selected_data["조리법"]
+
+if recipe:
+    st.markdown(
+        f'<div class="recipe-card">'
+        f'{html.escape(recipe).replace(chr(10), "<br>")}'
+        f'</div>',
+        unsafe_allow_html=True
+    )
+else:
+    st.info("등록된 조리 방법이 없습니다.")
+
+# ---------------------------------
+# 13. 상세 설명
+# ---------------------------------
+
+st.subheader("📖 메뉴 상세 설명")
+
+description = selected_data["상세설명"]
+
+if description:
+    st.write(description)
+else:
+    st.info("등록된 상세 설명이 없습니다.")
+
+# ---------------------------------
+# 14. 데이터 정보
+# ---------------------------------
 
 st.divider()
 
-with st.expander("📚 데이터 출처 및 정보"):
+st.subheader("📊 데이터 정보")
 
-    st.write(
-        "데이터명: 보성군 차 음식 및 디저트 정보"
-    )
+col1, col2 = st.columns(2)
 
-    st.write(
-        "데이터 기준일자: 2022-10-30"
-    )
+with col1:
+    st.metric("전체 데이터 수", f"{len(df):,}개")
 
-    st.write(
-        "데이터 항목: 요리명, 주재료, 부재료, "
-        "조리법, 상세설명"
-    )
+with col2:
+    st.metric("검색된 메뉴 수", f"{len(filtered_df):,}개")
 
-    st.caption(
-        "본 사이트는 제공된 CSV 데이터를 활용하여 "
-        "메뉴별 레시피 정보를 제공합니다."
-    )
+if "기준일자" in df.columns:
+    st.caption(f"데이터 기준일자: {selected_data.get('기준일자', '정보 없음')}")
 
-
-st.markdown(
-    """
-    <div style="
-        text-align:center;
-        color:#999999;
-        padding:25px;
-        font-size:13px;
-    ">
-        TEA & DESSERT | Recipe Archive
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+st.caption("※ 제공된 CSV 데이터에 수록된 정보를 바탕으로 구성한 레시피입니다.")
