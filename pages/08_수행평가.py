@@ -61,7 +61,7 @@ div.stButton > button {
 st.title("🍰 우리 동네 디저트 레시피")
 
 st.write(
-    "다양한 디저트와 음료를 검색하고 "
+    "다양한 디저트와 음료를 선택하고 "
     "필요한 재료와 조리 방법을 확인해 보세요!"
 )
 
@@ -220,10 +220,10 @@ def classify_menu(name):
 df["분류"] = df["요리명"].apply(classify_menu)
 
 # =====================================
-# 9. 메뉴 검색 및 필터링
+# 9. 메뉴 종류 선택
 # =====================================
 
-st.subheader("🔎 원하는 메뉴 찾기")
+st.subheader("🍮 메뉴 선택")
 
 menu_type = st.radio(
     "메뉴 종류를 선택하세요.",
@@ -239,27 +239,12 @@ else:
         df["분류"] == menu_type
     ].copy()
 
-search_word = st.text_input(
-    "메뉴 이름 검색",
-    placeholder="예: 녹차, 케이크, 쿠키..."
-)
-
-if search_word:
-    filtered_df = filtered_df[
-        filtered_df["요리명"].str.contains(
-            search_word,
-            case=False,
-            na=False,
-            regex=False
-        )
-    ]
-
 if filtered_df.empty:
-    st.warning("검색 결과가 없습니다.")
+    st.warning("해당 종류의 메뉴가 없습니다.")
     st.stop()
 
 # =====================================
-# 10. 메뉴 선택
+# 10. 메뉴 선택창
 # =====================================
 
 menu_list = sorted(
@@ -391,7 +376,7 @@ with col1:
 
 with col2:
     st.metric(
-        "검색 결과",
+        "선택 종류 메뉴 수",
         f"{len(filtered_df):,}개"
     )
 
